@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-13
 
+### Update app.py
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`4c0f2ff`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/4c0f2ff0d90a118753300b4cc9e8918b87009939)
+
+**Changed files (1):**
+
+- 🟡 `app.py`
+
+---
+
+## 2026-05-13
+
 ### Create runtime.txt
 
 - **Author:** Juan Francisco Fernandez Herreros
