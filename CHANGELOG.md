@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-13
 
+### Create runtime.txt
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`6e28f6a`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/6e28f6a64e48b14763cadcca9fd48ddf761f620d)
+
+**Changed files (1):**
+
+- 🟢 `runtime.txt`
+
+---
+
+## 2026-05-13
+
 ### Update requirements.txt
 
 - **Author:** Juan Francisco Fernandez Herreros
