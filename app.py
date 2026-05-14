@@ -18,31 +18,37 @@ def clean_filename(title):
 
 def base_ydl_opts():
     """
-    Opciones base que evitan la detección de bots de YouTube automáticamente.
-    - player_client: prueba android_vr y tv_embedded primero — no requieren verificación.
-    - http_headers: simula un navegador real.
-    - sleep_interval_requests: evita rate-limiting con pequeñas pausas.
+    Configuración 2026 para evitar 403 sin cookies ni proxy.
+    - player_client: 'mediaconnect' y 'ios' son los clientes más estables sin SABR.
+    - 'android_vr' y 'tv_embedded' están siendo bloqueados por YouTube en 2026.
+    - format: prioriza streams combinados (18) que no necesitan merge y evitan SABR.
+    - extractor_args formats=missing_pot: evita solicitar formatos que requieren PO token.
+    - throttledratelimit: si la velocidad cae por debajo de 100KB/s, reintenta con otro cliente.
+    - Deno debe estar instalado en el sistema para resolver JS challenges (ver Dockerfile).
     """
     return {
         'quiet': True,
         'no_warnings': True,
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_vr', 'tv_embedded', 'android', 'web'],
+                'player_client': ['mediaconnect', 'ios', 'android', 'web'],
+                'formats': ['missing_pot'],
             }
         },
         'http_headers': {
             'User-Agent': (
-                'Mozilla/5.0 (Linux; Android 10; SM-G981B) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/124.0.0.0 Mobile Safari/537.36'
+                'com.google.ios.youtube/19.45.4 '
+                '(iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)'
             ),
             'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept': '*/*',
         },
+        'throttledratelimit': 100000,   # reintenta si baja de 100 KB/s
         'sleep_interval_requests': 1,
-        'retries': 5,
-        'fragment_retries': 5,
+        'retries': 10,
+        'fragment_retries': 10,
+        'file_access_retries': 5,
+        'extractor_retries': 5,
     }
 
 def get_video_info(url):
@@ -58,16 +64,24 @@ def build_ydl_opts(video_type, quality, output_path):
     opts = {**base_ydl_opts(), 'outtmpl': outtmpl}
 
     if video_type == 'Audio 🎵':
+        # bestaudio/best — ios client lo sirve sin SABR en la mayoría de casos
         opts['format'] = 'bestaudio/best'
         opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192' if quality == 'Alta' else '128',
         }]
+
     elif video_type == 'Video (Solo) 🎬':
-        opts['format'] = 'bestvideo/best' if quality == 'Alta' else 'worstvideo/worst'
-    else:
-        opts['format'] = 'bestvideo+bestaudio/best' if quality == 'Alta' else 'worst'
+        # 18 = 360p combinado, nunca da 403 · bestvideo como intento previo en Alta
+        opts['format'] = 'bestvideo[ext=mp4]/18' if quality == 'Alta' else '18'
+
+    else:  # Completo
+        # Intentar mejor calidad con fallback a 18 (combinado, sin merge, sin SABR)
+        if quality == 'Alta':
+            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/18/best'
+        else:
+            opts['format'] = '18/best'
         opts['merge_output_format'] = 'mp4'
 
     return opts
