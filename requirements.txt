@@ -1,32 +1,4 @@
 # Core
-langchain
-langchain-openai
-langchain-community
-langgraph                     # StateGraph workflows
-openai                        # Whisper transcription API
-streamlit
-python-dotenv
-
-# Document Loaders
-beautifulsoup4      # WebBaseLoader
-pypdf               # PyPDFLoader
-
-# Text Splitters y Embeddings
-langchain-text-splitters
-numpy
-
-# Retrievers (Vector Stores)
-faiss-cpu
-rank_bm25
-chromadb
-
-# Proyectos integradores
-duckduckgo-search         # Agente IA
-yt-dlp>=2026.02.21        # Descarga de video (Motor principal)
-pytubefix                 # Descarga y gestión de YouTube (Alternativa estable)
-
-# Opcionales para Loaders específicos
-youtube-transcript-api    # Necesario para YoutubeLoader (transcripciones)
-
 streamlit>=1.35.0
 yt-dlp>=2026.02.21
+python-dotenv
