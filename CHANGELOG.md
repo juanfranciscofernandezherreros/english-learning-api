@@ -2,6 +2,19 @@
 
 All notable changes merged to `master` are documented automatically.
 
+## 2026-05-14
+
+### Update README.md
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`eb00341`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/eb0034186613ecb07ea1a180d67ae98e2b82366f)
+
+**Changed files (1):**
+
+- 🟡 `README.md`
+
+---
+
 ## 2026-05-13
 
 ### Actualizar app.py
