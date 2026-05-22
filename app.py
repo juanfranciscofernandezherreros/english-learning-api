@@ -49,7 +49,7 @@ def init_db():
             );
         """)
 
-        # NUEVA: Tabla de Temario Estilo Libro
+        # Tabla de Temario Estilo Libro
         cur.execute("""
             CREATE TABLE IF NOT EXISTS learning_topics (
                 id SERIAL PRIMARY KEY,
@@ -81,8 +81,20 @@ def init_db():
                 (
                     'Past Simple', 
                     'Utilizado para acciones puntuales que comenzaron y terminaron en el pasado.',
-                    'Para los verbos regulares, el pasado se forma añadiendo la terminación "-ed". Los verbos irregulares cambian su forma por completo y deben memorizarse. El verbo auxiliar para negar e interrogar en este tiempo es *did*.',
+                    'Para los verbos regulares, el pasado se forma añadiendo la terminación "-ed". Los verbos irregulares cambian su forma por completo. El verbo auxiliar para negar e interrogar en este tiempo es *did*.',
                     '["They watched a movie last night.", "He went to London in 2024.", "Did you finish the report?"]'
+                ),
+                (
+                    'Past Continuous', 
+                    'Utilizado para describir acciones que se estaban desarrollando en un momento específico del pasado.',
+                    'Se estructura utilizando el pasado del verbo auxiliar *to be* (was/were) más el gerundio del verbo principal (-ing). Se usa frecuentemente para preparar el escenario de una historia o interrumpir una acción larga con una corta en Past Simple.',
+                    '["I was walking down the street when it started to rain.", "They were studying all night long.", "What were you doing at 8 PM yesterday?"]'
+                ),
+                (
+                    'Present Perfect', 
+                    'Conecta el pasado con el presente; enfocado en el resultado o en experiencias.',
+                    'Se forma usando el auxiliar *have/has* junto al participio pasado del verbo principal (verbos regulares con "-ed" o la tercera columna de los irregulares). Importante: no se menciona un tiempo específico terminado.',
+                    '["I have lost my keys.", "She has visited Paris three times.", "Have you ever eaten sushi?"]'
                 );
             """)
             conn.commit()
@@ -182,6 +194,8 @@ if "user" not in st.session_state:
     st.session_state.user = None  
 if "questions" not in st.session_state:
     st.session_state.questions = None
+if "capitulo_seleccionado" not in st.session_state:
+    st.session_state.capitulo_seleccionado = 0  # Índice por defecto para el temario
 
 # --- 4. ENTORNO PÚBLICO (CONTENIDO ANTES DE INICIAR SESIÓN) ---
 if st.session_state.user is None:
@@ -236,10 +250,24 @@ if st.session_state.user is None:
     
     if lecciones:
         nombres_lecciones = [l['title'] for l in lecciones]
-        leccion_seleccionada = st.selectbox("📖 Selecciona un capítulo para estudiar:", nombres_lecciones)
         
-        # Buscar la información de la lección elegida
-        datos_leccion = next(l for l in lecciones if l['title'] == leccion_seleccionada)
+        # Callback para registrar el cambio de lección de forma segura en la sesión
+        def cambiar_leccion():
+            for idx, l in enumerate(lecciones):
+                if l['title'] == st.session_state.selector_libro:
+                    st.session_state.capitulo_seleccionado = idx
+                    break
+
+        leccion_seleccionada = st.selectbox(
+            "📖 Selecciona un capítulo para estudiar:", 
+            nombres_lecciones,
+            index=st.session_state.capitulo_seleccionado,
+            key="selector_libro",
+            on_change=cambiar_leccion
+        )
+        
+        # Recuperar los datos del capítulo empleando el índice guardado en sesión
+        datos_leccion = lecciones[st.session_state.capitulo_seleccionado]
         
         # Renderizado estético de la lección
         st.markdown(f"## {datos_leccion['title']}")
@@ -247,7 +275,6 @@ if st.session_state.user is None:
         st.write(datos_leccion['content'])
         
         st.markdown("### 📝 Ejemplos prácticos de uso:")
-        # Asegurar la lectura del JSONB tanto en formato string como ya parseado
         ejemplos = datos_leccion['examples']
         if isinstance(ejemplos, str):
             ejemplos = json.loads(ejemplos)
@@ -417,7 +444,7 @@ else:
             st.warning("🔑 Por favor, introduce tu OpenAI API Key en la barra lateral para comenzar.")
         else:
             if st.sidebar.button("🔄 Generar Nuevo Test") or st.session_state.questions is None:
-                with st.spinner("La IA está analizando tu historial y diseñando tus preguntas..."):
+                with st.spinner("La IA está analizizando tu historial y diseñando tus preguntas..."):
                     st.session_state.questions = generate_questions_from_api(api_key, user_active['dni'], level, num_questions)
                     st.rerun()
 
