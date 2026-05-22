@@ -20,9 +20,6 @@ DB_CONFIG = {
     "password": "npg_urVnAFP3Hy4M"
 }
 
-postgresql://neondb_owner:npg_urVnAFP3Hy4M@ep-old-field-ambx94k5-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
-
-
 # Conexión lateral para la API de OpenAI
 st.sidebar.header("Configuración de la IA")
 api_key = st.sidebar.text_input("Introduce tu OpenAI API Key", type="password")
