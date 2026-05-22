@@ -1,212 +1,223 @@
 import streamlit as st
-import yt_dlp
-import re
-import os
+import json
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from openai import OpenAI
+from datetime import datetime
 
-st.set_page_config(page_title="YT Manager & Downloader", page_icon="📥", layout="wide")
+# Configuración de la página
+st.set_page_config(page_title="AI Adaptive English Test", page_icon="🇬🇧", layout="centered")
 
-DOWNLOAD_DIR = os.path.join(os.getcwd(), "descargas")
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+st.title("🇬🇧 Test de Inglés Adaptativo con PostgreSQL")
+st.write("Esta app guarda tus resultados en tu base de datos local y genera nuevas preguntas basadas en tus fallos anteriores.")
 
-if 'video_queue' not in st.session_state:
-    st.session_state.video_queue = []
-if 'downloading' not in st.session_state:
-    st.session_state.downloading = False
+# 1. Configuración de conexiones (Traducido de tus propiedades de Spring)
+DB_CONFIG = {
+    "host": "ep-old-field-ambx94k5-pooler.c-5.us-east-1.aws.neon.tech",
+    "port": 5432,  # El puerto estándar de PostgreSQL, implícito en la URL
+    "database": "neondb",
+    "user": "neondb_owner",
+    "password": "npg_urVnAFP3Hy4M"
+}
 
-def clean_filename(title):
-    return re.sub(r'[\\/*?:"<>|]', "", title)
+postgresql://neondb_owner:npg_urVnAFP3Hy4M@ep-old-field-ambx94k5-pooler.c-5.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require
 
-def base_ydl_opts():
+
+# Conexión lateral para la API de OpenAI
+st.sidebar.header("Configuración de la IA")
+api_key = st.sidebar.text_input("Introduce tu OpenAI API Key", type="password")
+
+level = st.sidebar.selectbox(
+    "Nivel del test (MCER)", 
+    ["A1 (Principiante)", "A2 (Elemental)", "B1 (Intermedio)", "B2 (Intermedio Alto)", "C1 (Avanzado)", "C2 (Maestría)"]
+)
+num_questions = st.sidebar.slider("Número de preguntas", min_value=3, max_value=10, value=5)
+
+# 2. Funciones de Base de Datos
+def init_db():
+    """Crea la tabla de historial si no existe en invoice_db"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS english_test_history (
+                id SERIAL PRIMARY KEY,
+                question TEXT NOT NULL,
+                level VARCHAR(50) NOT NULL,
+                user_answer TEXT NOT NULL,
+                correct_answer TEXT NOT NULL,
+                is_correct BOOLEAN NOT NULL,
+                explanation TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error al inicializar la base de datos: {e}")
+
+def save_answer_to_db(question, lvl, user_ans, correct_ans, is_correct, explanation):
+    """Guarda cada respuesta del formulario en PostgreSQL"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO english_test_history (question, level, user_answer, correct_answer, is_correct, explanation)
+            VALUES (%s, %s, %s, %s, %s, %s);
+        """, (question, lvl, user_ans, correct_ans, is_correct, explanation))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Error al guardar en la base de datos: {e}")
+
+def get_recent_failures(lvl, limit=5):
+    """Recupera los últimos fallos del usuario en el nivel seleccionado"""
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        # Usamos RealDictCursor para manejar los resultados como diccionarios cómodamente
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT question, correct_answer, explanation 
+            FROM english_test_history 
+            WHERE level = %s AND is_correct = FALSE 
+            ORDER BY created_at DESC 
+            LIMIT %s;
+        """, (lvl, limit))
+        failures = cur.fetchall()
+        cur.close()
+        conn.close()
+        return failures
+    except Exception as e:
+        st.error(f"Error al consultar fallos previos: {e}")
+        return []
+
+# Inicializar la base de datos al cargar la app
+init_db()
+
+# 3. Inicializar estados de la sesión de Streamlit
+if "questions" not in st.session_state:
+    st.session_state.questions = None
+if "current_level" not in st.session_state:
+    st.session_state.current_level = level
+
+if st.session_state.current_level != level:
+    st.session_state.questions = None
+    st.session_state.current_level = level
+
+# 4. Función de generación con enfoque adaptativo (Prompt dinámico)
+def generate_questions_from_api(api_key, lvl, num):
+    client = OpenAI(api_key=api_key)
+    
+    # Consultar si el usuario tiene errores previos en este nivel
+    past_failures = get_recent_failures(lvl)
+    failures_context = ""
+    
+    if past_failures:
+        failures_context = "\n⚠️ ENFOQUE ADAPTATIVO REQUERIDO:\nEl usuario ha fallado recientemente en las siguientes preguntas de este nivel. Analiza sus errores gramaticales o léxicos y genera preguntas NUEVAS que evalúen esos MISMOS conceptos problemáticos pero usando contextos o frases totalmente diferentes para ayudarle a reforzarlos:\n"
+        for f in past_failures:
+            failures_context += f"- Pregunta fallada: '{f['question']}' (La respuesta correcta era: '{f['correct_answer']}'). Contexto/Regla: {f['explanation']}\n"
+
+    prompt = f"""
+    Eres un profesor de inglés experto encargado de crear un examen de opción múltiple adaptativo.
+    Genera exactamente {num} preguntas en inglés adaptadas al nivel {lvl}.
+    {failures_context}
+    
+    Debes devolver OBLIGATORIAMENTE un objeto JSON que contenga una lista bajo la clave "questions".
+    Cada pregunta dentro de la lista debe seguir esta estructura exacta:
+    {{
+        "id": un número entero secuencial empezando en 1,
+        "question": "La frase en inglés con la laguna representada por '......' o una pregunta directa",
+        "options": ["Opción A", "Opción B", "Opción C", "Opción D"],
+        "correct": "La opción exacta que responde correctamente a la pregunta",
+        "explanation": "Una breve explicación en español de por qué es la correcta y qué regla gramatical o léxica se aplica"
+    }}
+    Asegúrate de que solo una de las opciones sea gramaticalmente correcta y que las preguntas sean variadas.
     """
-    Configuración 2026 para evitar 403 sin cookies ni proxy.
-    - player_client: 'mediaconnect' y 'ios' son los clientes más estables sin SABR.
-    - 'android_vr' y 'tv_embedded' están siendo bloqueados por YouTube en 2026.
-    - format: prioriza streams combinados (18) que no necesitan merge y evitan SABR.
-    - extractor_args formats=missing_pot: evita solicitar formatos que requieren PO token.
-    - throttledratelimit: si la velocidad cae por debajo de 100KB/s, reintenta con otro cliente.
-    - Deno debe estar instalado en el sistema para resolver JS challenges (ver Dockerfile).
-    """
-    return {
-        'quiet': True,
-        'no_warnings': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mediaconnect', 'ios', 'android', 'web'],
-                'formats': ['missing_pot'],
-            }
-        },
-        'http_headers': {
-            'User-Agent': (
-                'com.google.ios.youtube/19.45.4 '
-                '(iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)'
-            ),
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Accept': '*/*',
-        },
-        'throttledratelimit': 100000,   # reintenta si baja de 100 KB/s
-        'sleep_interval_requests': 1,
-        'retries': 10,
-        'fragment_retries': 10,
-        'file_access_retries': 5,
-        'extractor_retries': 5,
-    }
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o", 
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.7
+        )
+        result = json.loads(response.choices[0].message.content)
+        return result.get("questions", [])
+    except Exception as e:
+        st.error(f"Error al conectar con OpenAI: {e}")
+        return None
 
-def get_video_info(url):
-    ydl_opts = {**base_ydl_opts(), 'skip_download': True}
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        if 'entries' in info:
-            return list(info['entries'])
-        return [info]
-
-def build_ydl_opts(video_type, quality, output_path):
-    outtmpl = os.path.join(output_path, '%(title)s.%(ext)s')
-    opts = {**base_ydl_opts(), 'outtmpl': outtmpl}
-
-    if video_type == 'Audio 🎵':
-        # bestaudio/best — ios client lo sirve sin SABR en la mayoría de casos
-        opts['format'] = 'bestaudio/best'
-        opts['postprocessors'] = [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192' if quality == 'Alta' else '128',
-        }]
-
-    elif video_type == 'Video (Solo) 🎬':
-        # 18 = 360p combinado, nunca da 403 · bestvideo como intento previo en Alta
-        opts['format'] = 'bestvideo[ext=mp4]/18' if quality == 'Alta' else '18'
-
-    else:  # Completo
-        # Intentar mejor calidad con fallback a 18 (combinado, sin merge, sin SABR)
-        if quality == 'Alta':
-            opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/18/best'
-        else:
-            opts['format'] = '18/best'
-        opts['merge_output_format'] = 'mp4'
-
-    return opts
-
-# --- UI ---
-st.title(":red[▶️] YT Batch & Playlist Downloader")
-
-with st.container(border=True):
-    col_in, col_add, col_clear = st.columns([6, 2, 2])
-    with col_in:
-        new_url = st.text_input("URL del video o Playlist", placeholder="https://...", label_visibility="collapsed")
-    with col_add:
-        if st.button("➕ Añadir", use_container_width=True, type="secondary"):
-            if new_url:
-                try:
-                    with st.spinner("Analizando URL..."):
-                        entries = get_video_info(new_url)
-                        added = 0
-                        for entry in entries:
-                            video_url = entry.get('webpage_url') or entry.get('url')
-                            if video_url and video_url not in st.session_state.video_queue:
-                                st.session_state.video_queue.append(video_url)
-                                added += 1
-                        if added > 1:
-                            st.toast(f"Añadidos {added} videos de la playlist.")
-                        else:
-                            st.toast("Video añadido a la cola.")
-                except Exception as e:
-                    st.error(f"Error al analizar la URL: {e}")
-    with col_clear:
-        if st.button("🗑️ Vaciar", use_container_width=True):
-            st.session_state.video_queue = []
+# 5. Lógica de la Interfaz
+if not api_key:
+    st.warning("🔑 Por favor, introduce tu OpenAI API Key en la barra lateral para comenzar.")
+else:
+    if st.sidebar.button("🔄 Generar Nuevo Test") or st.session_state.questions is None:
+        with st.spinner("La IA está analizando tu historial y diseñando tus preguntas..."):
+            st.session_state.questions = generate_questions_from_api(api_key, level, num_questions)
             st.rerun()
 
-c1, c2 = st.columns(2)
-with c1:
-    video_type = st.selectbox("Formato", ["Audio 🎵", "Video (Solo) 🎬", "Completo 🎥"])
-with c2:
-    quality = st.select_slider("Calidad", options=["Baja", "Alta"])
+if st.session_state.questions:
+    # Mostrar si hay preguntas de refuerzo activas
+    failures_count = len(get_recent_failures(level))
+    if failures_count > 0:
+        st.caption(f"🔄 Se han detectado fallos previos en el nivel {level}. Este test incluye preguntas de refuerzo personalizadas.")
+    
+    with st.form("quiz_form"):
+        user_answers = {}
+        
+        for q in st.session_state.questions:
+            st.markdown(f"### Pregunta {q['id']}")
+            user_answers[q["id"]] = st.radio(
+                q["question"],
+                options=q["options"],
+                index=None,
+                key=f"q_{level}_{q['id']}"
+            )
+            st.write("---")
+            
+        submitted = st.form_submit_button("Enviar Respuestas")
 
-st.divider()
-
-status_container = st.empty()
-
-if st.session_state.video_queue:
-    st.write(f"**Cola de descargas:** {len(st.session_state.video_queue)} videos listos.")
-
-    if st.button("🚀 Iniciar Descarga de la Cola", type="primary", use_container_width=True):
-        st.session_state.downloading = True
-
-    if st.session_state.downloading:
-        total_videos = len(st.session_state.video_queue)
-        general_progress = status_container.progress(0, text=f"Progreso General: 0 / {total_videos}")
-
-        for index, url in enumerate(st.session_state.video_queue):
-            try:
-                with st.container(border=True):
-                    info_entries = get_video_info(url)
-                    info = info_entries[0]
-                    title = info.get('title', 'video')
-                    thumbnail = info.get('thumbnail')
-
-                    col_t, col_i = st.columns([1, 4])
-                    with col_t:
-                        if thumbnail:
-                            st.image(thumbnail, width=150)
-                    with col_i:
-                        st.markdown(f"**{title}**")
-
-                    progress_bar = st.progress(0, text="Preparando descarga...")
-
-                    def progress_hook(d):
-                        if d['status'] == 'downloading':
-                            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-                            downloaded = d.get('downloaded_bytes', 0)
-                            if total > 0:
-                                pct = int(downloaded / total * 100)
-                                progress_bar.progress(pct, text=f"Descargando: {pct}%")
-                        elif d['status'] == 'finished':
-                            progress_bar.progress(100, text="Procesando...")
-
-                    ydl_opts = build_ydl_opts(video_type, quality, DOWNLOAD_DIR)
-                    ydl_opts['progress_hooks'] = [progress_hook]
-
-                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.download([url])
-
-                    progress_bar.empty()
-
-                    files = sorted(
-                        [f for f in os.listdir(DOWNLOAD_DIR)],
-                        key=lambda f: os.path.getmtime(os.path.join(DOWNLOAD_DIR, f)),
-                        reverse=True
+    # 6. Procesamiento y guardado tras enviar
+    if submitted:
+        if None in user_answers.values():
+            st.warning("⚠️ Por favor, responde a todas las preguntas antes de enviar.")
+        else:
+            score = 0
+            st.header("📊 Resultados del Test")
+            
+            with st.spinner("Guardando resultados en tu base de datos PostgreSQL..."):
+                for q in st.session_state.questions:
+                    ans = user_answers[q["id"]]
+                    is_correct = (ans == q["correct"])
+                    
+                    # GUARDAR EN POSTGRESQL
+                    save_answer_to_db(
+                        question=q["question"],
+                        lvl=level,
+                        user_ans=ans,
+                        correct_ans=q["correct"],
+                        is_correct=is_correct,
+                        explanation=q["explanation"]
                     )
-
-                    if files:
-                        latest_file = files[0]
-                        filepath = os.path.join(DOWNLOAD_DIR, latest_file)
-                        ext = latest_file.rsplit('.', 1)[-1]
-                        mime = "audio/mpeg" if ext == "mp3" else "video/mp4"
-
-                        st.success(f"✅ Completado: {latest_file}")
-                        with open(filepath, "rb") as f:
-                            st.download_button(
-                                label=f"⬇️ Descargar {latest_file}",
-                                data=f,
-                                file_name=latest_file,
-                                mime=mime,
-                                key=f"dl_{index}",
-                            )
-
-            except Exception as e:
-                st.error(f"Fallo al descargar {url}: {e}")
-
-            current_progress = int(((index + 1) / total_videos) * 100)
-            general_progress.progress(current_progress, text=f"Progreso General: {index + 1} / {total_videos}")
-
-        st.session_state.downloading = False
-        st.balloons()
-        st.success("¡Toda la cola ha sido procesada!")
-
-else:
-    st.info("Añade enlaces arriba para comenzar.")
-
-if st.session_state.video_queue and not st.session_state.downloading:
-    with st.expander("Ver videos en cola", expanded=True):
-        for u in st.session_state.video_queue:
-            st.caption(f"🔗 {u}")
+                    
+                    # Mostrar feedback visual inmediato en la UI
+                    if is_correct:
+                        score += 1
+                        st.success(f"**Pregunta {q['id']}: ¡Correcta!**  \n*{q['question']}*  \n👉 Seleccionaste: `{ans}`")
+                    else:
+                        st.error(f"**Pregunta {q['id']}: Incorrecta (Guardada para repaso)**  \n*{q['question']}*  \n❌ Tu respuesta: `{ans}`  \n✅ Correcta: `{q['correct']}`")
+                    
+                    st.info(f"💡 **Explicación:** {q['explanation']}")
+                    st.write("")
+            
+            # Puntuación final
+            total = len(st.session_state.questions)
+            st.subheader(f"Tu puntuación final: {score} / {total}")
+            
+            if score == total:
+                st.balloons()
+                st.success("🏆 ¡Excelente! Rendimiento perfecto.")
+            else:
+                st.warning("📝 Los fallos se han registrado. La próxima vez que generes un test en este nivel, la IA te preguntará sobre estos conceptos.")
