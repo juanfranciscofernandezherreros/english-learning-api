@@ -7,6 +7,19 @@ All notable changes merged to `master` are documented automatically.
 ### Update app.py
 
 - **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`0318ffd`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/0318ffd8ed79aa0245459bd7fbf717aad5e372e6)
+
+**Changed files (1):**
+
+- 🟡 `app.py`
+
+---
+
+## 2026-05-22
+
+### Update app.py
+
+- **Author:** Juan Francisco Fernandez Herreros
 - **Commit:** [`9df4412`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/9df4412fe62cf9afec7f6caf70b64d021cd75c37)
 
 **Changed files (1):**
