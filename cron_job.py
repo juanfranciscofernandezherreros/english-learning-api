@@ -115,7 +115,7 @@ def generate_daily_fce_grammar_topic():
     2. ENFOQUE EXAMEN (Use of English): Explica de forma explícita y práctica cómo utiliza Cambridge este punto gramatical exacto para puntuar o penalizar en las partes 2, 3 y 4 del examen.
     3. TRUCOS Y TRAMPAS (Cambridge Traps / FCE Tips): Actúa como un verdadero mentor. Advierte al alumno sobre los errores más comunes que comete el 90% de los estudiantes hispanohablantes debido a la traducción literal y revélale los trucos específicos que usa Cambridge para poner trampas en el examen real.
 
-    Devuelve un objeto JSON estricto con la clave 'topic' estructurado exactamente de la siguiente forma:
+    Devuelve un objeto JSON estricto que contenga las siguientes claves directamente en la RAÍZ (nivel superior) del objeto:
     {{
         "title": "{tema_titulo}",
         "summary": "Un gancho corto, enérgico y motivador en español que explique qué superpoder gramatical ganará el alumno hoy para destruir su examen B2.",
@@ -131,11 +131,11 @@ def generate_daily_fce_grammar_topic():
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt_generacion}],
             response_format={"type": "json_object"},
-            temperature=0.5  # Mantiene el tono carismático pero sin perder el rigor en las fórmulas
+            temperature=0.5
         )
 
-        datos_respuesta = json.loads(response.choices[0].message.content)
-        nuevo_tema = datos_respuesta["topic"]
+        # 🔥 CORRECCIÓN AQUÍ: Leemos las claves directamente de la raíz del JSON
+        nuevo_tema = json.loads(response.choices[0].message.content)
 
         # 5. Insertar el contenido y marcar el tema como procesado en la misma transacción
         cur.close()
