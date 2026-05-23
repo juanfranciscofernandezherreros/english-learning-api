@@ -82,7 +82,7 @@ class TopicSubmit(BaseModel):
 
 # --- 2. FUNCIONES INTERNAS Y BASE DE DATOS ---
 def init_db():
-    """Inicializa las tablas base de la academia si no existen"""
+    """Inicializa las tablas base de la academia si no existen, manteniéndolas vacías."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
@@ -117,19 +117,7 @@ def init_db():
             );
         """)
         conn.commit()
-
-        # Semilla opcional si está vacía
-        cur.execute("SELECT COUNT(*) FROM learning_topics;")
-        if cur.fetchone()[0] == 0:
-            cur.execute("""
-                INSERT INTO learning_topics (title, summary, content, examples) VALUES 
-                ('Present Simple', 'Rutinas y hechos.', 'Forma con infinitivo...', '["I work every day.", "She speaks fluently."]'),
-                ('Present Continuous', 'Acciones del momento.', 'Auxiliar to be + -ing...', '["We are developing an API."]'),
-                ('Past Simple', 'Acciones terminadas.', 'Terminación -ed o irregulares...', '["They watched a movie."]'),
-                ('Past Continuous', 'Acciones en desarrollo en el pasado.', 'Was/were + -ing...', '["I was walking when it rained."]'),
-                ('Present Perfect', 'Conecta pasado y presente.', 'Auxiliar have/has + participio...', '["She has visited Paris."]');
-            """)
-            conn.commit()
+        # 🔥 Se eliminó la sección de inserción automática de temas semilla (Present Simple, etc.)
     finally:
         cur.close()
         conn.close()
