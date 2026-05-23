@@ -2,6 +2,19 @@
 
 All notable changes merged to `master` are documented automatically.
 
+## 2026-05-23
+
+### Create cron_job.py
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`2051556`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/20515569a9cba37cc3e00c53475c4968583bdc42)
+
+**Changed files (1):**
+
+- 🟢 `cron_job.py`
+
+---
+
 ## 2026-05-22
 
 ### Actualizar requirements.txt
