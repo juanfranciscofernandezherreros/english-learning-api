@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-23
 
+### Update cron_job.py
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`3b4333f`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/3b4333faa09f0393409e7f03de8b23a86623df80)
+
+**Changed files (1):**
+
+- 🟡 `cron_job.py`
+
+---
+
+## 2026-05-23
+
 ### Create cron_job.py
 
 - **Author:** Juan Francisco Fernandez Herreros
