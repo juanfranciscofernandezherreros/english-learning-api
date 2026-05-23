@@ -2,6 +2,7 @@
 import os
 import json
 import psycopg2
+from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 
 DB_CONFIG = {
@@ -13,85 +14,81 @@ DB_CONFIG = {
 }
 
 def generate_daily_fce_grammar_topic():
-    print("🚀 Iniciando pipeline dinámico de dos pasos para B2 First (FCE)...")
+    print("🚀 Iniciando generador secuencial profundo para B2 First (FCE)...")
     
     openai_api_key = os.getenv("OPENAI_API_KEY")
     if not openai_api_key:
         print("❌ Error: OPENAI_API_KEY no está configurada en Heroku.")
         return
 
-    # --- PASO 0: LEER LO QUE YA EXISTE EN NEON ---
+    # --- PASO 1: LEER EL SIGUIENTE TEMA PENDIENTE DE LA COLA ---
     conn = psycopg2.connect(**DB_CONFIG)
-    cur = conn.cursor()
-    try:
-        cur.execute("SELECT title FROM learning_topics;")
-        temas_actuales = [row[0] for row in cur.fetchall()]
-    finally:
-        cur.close()
-
-    client = OpenAI(api_key=openai_api_key)
-
-    # --- PASO 1: DECIDIR EL TEMA (Brainstorming) ---
-    print(f"📊 Analizando {len(temas_actuales)} temas existentes para decidir el siguiente paso...")
+    cur = conn.cursor(cursor_factory=RealDictCursor)
     
-    prompt_decision = f"""
-    Eres el Director de Estudios de una academia oficial de Cambridge. Tu única tarea es analizar el plan de estudios actual de nivel B2 First (FCE) y decidir qué concepto técnico de gramática avanzada falta por agregar.
+    try:
+        cur.execute("""
+            SELECT id, title FROM curated_topics_queue 
+            WHERE is_generated = FALSE 
+            ORDER BY id ASC LIMIT 1;
+        """)
+        target_topic = cur.fetchone()
+    except Exception as e:
+        print(f"❌ Error al consultar la cola de temas: {str(e)}")
+        cur.close()
+        conn.close()
+        return
 
-    TEMAS QUE YA ESTÁN REGISTRADOS:
-    {json.dumps(temas_actuales)}
+    if not target_topic:
+        print("☕ Todos los temas de la lista ya han sido generados.")
+        cur.close()
+        conn.close()
+        return
 
-    INSTRUCCIONES:
-    Revisa la lista anterior. Pensando en el temario oficial de Cambridge B2 First (especialmente las estructuras necesarias para Use of English Parts 2, 3 y 4), determina cuál es el siguiente tema gramatical más urgente, específico y relevante que no esté en la lista. 
-    Evita títulos genéricos como 'Gramática B2' o 'Tiempos Verbales'. Debe ser un punto gramatical concreto.
+    tema_id = target_topic['id']
+    tema_titulo = target_topic['title']
+    print(f"🎯 Redactando lección magistral para: '{tema_titulo}'")
 
-    Devuelve estrictamente un objeto JSON con la clave 'chosen_topic':
+    # --- PASO 2: ENVIAR A OPENAI CON EL PROMPT DE PROFESOR EXPERTO ---
+    client = OpenAI(api_key=openai_api_key)
+    
+    prompt_generacion = f"""
+    Eres un profesor de inglés nativo, carismático, empático y experto en preparar a alumnos para el examen Cambridge B2 First Certificate (FCE). 
+    Tu tono es cercano, motivador, claro y muy pedagógico, como si estuvieras dando una clase en directo. Te apasiona enseñar y quieres que el alumno realmente 'entienda' el porqué de las reglas, no que solo las memorice.
+
+    Tu tarea es escribir un artículo EXTENSO, minucioso y ultra detallado sobre el siguiente tema:
+    TEMA: '{tema_titulo}'
+
+    INSTRUCCIONES DE REDACCIÓN (Sé muy generoso con el texto, no resumas):
+    1. EXPLICACIÓN PROFUNDA: Desglosa el tema desde cero. Explica las fórmulas físicas estructurales, los matices de significado y en qué situaciones exactas se usa frente a otras estructuras parecidas.
+    2. ENFOQUE EXAMEN (Use of English): Explica de forma explícita cómo utiliza Cambridge este punto gramatical para puntuar o penalizar en las partes 2, 3 y 4 del examen.
+    3. TRUCOS Y TRAMPAS (Cambridge Traps): Actúa como un mentor. Advierte al alumno sobre los errores típicos que comete el 90% de los estudiantes hispanohablantes y revélale los trucos que usa Cambridge para poner trampas en el examen real.
+
+    Devuelve un objeto JSON estricto con la clave 'topic':
     {{
-        "chosen_topic": "Nombre técnico exacto del tema en inglés"
+        "title": "{tema_titulo}",
+        "summary": "Un gancho corto y motivador en español que explique qué superpoder gramatical ganará el alumno hoy para su examen B2.",
+        "content": "Escribe aquí la lección completa en español utilizando un formato de profesor (puedes usar subtítulos internos y viñetas organizadas). Extiéndete todo lo necesario para que sea una explicación impecable, profunda y de nivel académico premium.",
+        "examples": [
+            "Debes incluir obligatoriamente entre 8 y 10 ejemplos detallados en formato string. Combina oraciones de uso común con al menos 4 transformaciones reales tipo 'Use of English Part 4'. Organiza cada ejemplo de forma visualmente clara, por ejemplo: 'ORIGINAL: ... | KEYWORD: ... | TRANSFORMED: ... (Traducción al español)'."
+        ]
     }}
     """
 
     try:
-        response_1 = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt_decision}],
-            response_format={"type": "json_object"},
-            temperature=0.8 # Un poco más alto para que varíe sus decisiones de currículum
-        )
-        
-        decision = json.loads(response_1.choices[0].message.content)
-        tema_elegido = decision.get("chosen_topic")
-        print(f"🎯 La IA ha decidido crear la lección: '{tema_elegido}'")
-
-        # --- PASO 2: GENERAR EL CONTENIDO DE FORMA PROFUNDA ---
-        print(f"✍️ Generando contenido académico exhaustivo para '{tema_elegido}'...")
-        
-        prompt_generacion = f"""
-        Eres un examinador experto de Cambridge B2 First Certificate (FCE). 
-        Tu tarea es redactar una lección de nivel B2 completa, rigurosa y didáctica centrada única y exclusivamente en el siguiente tema:
-
-        TEMA A DESARROLLAR: '{tema_elegido}'
-
-        Devuelve un objeto JSON estricto con la clave 'topic' estructurado de la siguiente forma:
-        {{
-            "title": "{tema_elegido}",
-            "summary": "Una frase corta en español que explique qué estructura del examen B2 First o problema práctico resuelve esta lección.",
-            "content": "Explicación didáctica y rigurosa en español. Debe incluir: 1) Estructura formal y fórmulas gramaticales claras. 2) Cómo se aplica exactamente en las secciones de Use of English. 3) Cambridge Traps / FCE Tips: Trucos de examen y errores típicos que los alumnos cometen y que Cambridge suele poner como trampa en el Use of English Part 4.",
-            "examples": ["Mínimo 3 ejemplos reales de transformación de frases (Key Word Transformation) tipo examen B2 en inglés, incluyendo la palabra clave requerida si aplica, y su correspondiente traducción al español entre paréntesis."]
-        }}
-        """
-
-        response_2 = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt_generacion}],
             response_format={"type": "json_object"},
-            temperature=0.3 # Temperatura baja para máxima precisión en la teoría y fórmulas
+            temperature=0.5 # Equilibrio: creativo en el tono de profesor, riguroso en la gramática
         )
 
-        datos_respuesta = json.loads(response_2.choices[0].message.content)
+        datos_respuesta = json.loads(response.choices[0].message.content)
         nuevo_tema = datos_respuesta["topic"]
 
-        # --- PASO 3: GUARDAR EN NEON ---
+        # --- PASO 3: GUARDAR CONTENIDO Y ACTUALIZAR ESTADO ---
+        cur.close()
         cur = conn.cursor()
+
         cur.execute("""
             INSERT INTO learning_topics (title, summary, content, examples)
             VALUES (%s, %s, %s, %s);
@@ -101,13 +98,21 @@ def generate_daily_fce_grammar_topic():
             nuevo_tema["content"],
             json.dumps(nuevo_tema["examples"])
         ))
+
+        cur.execute("""
+            UPDATE curated_topics_queue 
+            SET is_generated = TRUE 
+            WHERE id = %s;
+        """, (tema_id,))
+
         conn.commit()
-        print(f"✅ ¡Pipeline completado con éxito! Tema insertado: {nuevo_tema['title']}")
+        print(f"✅ ¡Lección magistral publicada con éxito!: {nuevo_tema['title']}")
 
     except Exception as e:
         conn.rollback()
-        print(f"❌ Error en el pipeline dinámico: {str(e)}")
+        print(f"❌ Error en la generación del artículo extenso: {str(e)}")
     finally:
+        cur.close()
         conn.close()
 
 if __name__ == "__main__":
