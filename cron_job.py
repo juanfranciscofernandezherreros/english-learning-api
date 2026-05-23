@@ -15,12 +15,12 @@ DB_CONFIG = {
 }
 
 def init_cron_tables():
-    """Asegura que la infraestructura de tablas exista de forma autónoma antes de ejecutar el cron."""
+    """Asegura que la infraestructura de la tabla de control exista si no ha sido creada."""
     print("🛡️  Comprobando la integridad de las tablas en Neon...")
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
-        # 1. Crear la tabla de control (cola de tareas) si no existe
+        # Crea la tabla vacía si no existe. No se inserta ningún dato automático.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS curated_topics_queue (
                 id SERIAL PRIMARY KEY,
@@ -30,30 +30,7 @@ def init_cron_tables():
             );
         """)
         conn.commit()
-
-        # 2. Semilla automática: Si la cola está limpia, inyectamos un temario premium del B2 First
-        cur.execute("SELECT COUNT(*) FROM curated_topics_queue;")
-        if cur.fetchone()[0] == 0:
-            print("🌱 Cola de temas vacía. Inyectando plan de estudios oficial para el B2 First...")
-            temas_semilla = [
-                'Present Simple (Advanced usage & Stative verbs)',
-                'Mixed Conditionals (Type 2 + Type 3)',
-                'Passive Voice with Reporting Verbs (It is said that...)',
-                'Inversion for Emphasis after Negative Adverbs (Seldom, Barely)',
-                'Advanced Wish and If Only structures',
-                'Modals of Speculation and Deduction in the Past (Must have, Can\'t have)',
-                'Relative Clauses (Defining vs Non-Defining advanced uses)',
-                'Gerund vs Infinitive after verbs of change or regret',
-                'Used to, Get used to, and Would for past habits',
-                'Phrasal Verbs crucial for FCE Use of English Part 4'
-            ]
-            for tema in temas_semilla:
-                cur.execute("""
-                    INSERT INTO curated_topics_queue (title) 
-                    VALUES (%s) ON CONFLICT DO NOTHING;
-                """, (tema,))
-            conn.commit()
-            print("✅ Temas semilla de Cambridge inyectados con éxito.")
+        print("✅ Estructura de tabla de control verificada.")
             
     except Exception as e:
         print(f"❌ Error crítico al inicializar las tablas del cron: {str(e)}")
@@ -89,9 +66,9 @@ def generate_daily_fce_grammar_topic():
         conn.close()
         return
 
-    # 3. Control de parada segura si el temario se agota
+    # 3. Control de parada segura si el temario se agota o está vacío
     if not target_topic:
-        print("☕ ¡Excelente! Todos los temas de la lista ya han sido generados. No hay tareas para hoy.")
+        print("☕ La cola de temas está vacía o todos los temas ya han sido generados. Agrega más filas a 'curated_topics_queue'.")
         cur.close()
         conn.close()
         return
@@ -134,14 +111,13 @@ def generate_daily_fce_grammar_topic():
             temperature=0.5
         )
 
-        # 🔥 CORRECCIÓN AQUÍ: Leemos las claves directamente de la raíz del JSON
         nuevo_tema = json.loads(response.choices[0].message.content)
 
         # 5. Insertar el contenido y marcar el tema como procesado en la misma transacción
         cur.close()
         cur = conn.cursor()
 
-        # Inyección en la biblioteca que consumen los alumnos
+        # Inyección en la biblioteca de temas finales
         cur.execute("""
             INSERT INTO learning_topics (title, summary, content, examples)
             VALUES (%s, %s, %s, %s);
@@ -152,7 +128,7 @@ def generate_daily_fce_grammar_topic():
             json.dumps(nuevo_tema["examples"])
         ))
 
-        # Actualización de la tabla de control
+        # Actualización de la fila en la tabla de control
         cur.execute("""
             UPDATE curated_topics_queue 
             SET is_generated = TRUE 
@@ -171,8 +147,8 @@ def generate_daily_fce_grammar_topic():
 
 
 if __name__ == "__main__":
-    # 1. Asegurar que las tablas existan
+    # 1. Asegurar la existencia de la estructura base
     init_cron_tables()
     
-    # 2. Ejecutar la automatización de contenido
+    # 2. Ejecutar la lectura y generación del tema pendiente
     generate_daily_fce_grammar_topic()
