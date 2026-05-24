@@ -2,6 +2,19 @@
 
 All notable changes merged to `master` are documented automatically.
 
+## 2026-05-24
+
+### Update cron_job.py
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`270aaa9`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/270aaa9c9f24b1481bef8c1b5c65d7da647f8ac5)
+
+**Changed files (1):**
+
+- 🟡 `cron_job.py`
+
+---
+
 ## 2026-05-23
 
 ### Update app.py
