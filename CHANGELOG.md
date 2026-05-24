@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-24
 
+### Update README.md
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`ce8aa3c`](https://github.com/juanfranciscofernandezherreros/english-learning-api/commit/ce8aa3cb4fc0681a9c112649764d247e1762187d)
+
+**Changed files (1):**
+
+- 🟡 `README.md`
+
+---
+
+## 2026-05-24
+
 ### Update Procfile
 
 - **Author:** Juan Francisco Fernandez Herreros
