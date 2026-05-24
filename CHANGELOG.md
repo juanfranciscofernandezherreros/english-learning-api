@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-24
 
+### Update add_topic.py
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`b8dc7fe`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/b8dc7fe7341580e3798c5ce52ccf3abb9b1133aa)
+
+**Changed files (1):**
+
+- 🟡 `add_topic.py`
+
+---
+
+## 2026-05-24
+
 ### Create add_topic.py
 
 - **Author:** Juan Francisco Fernandez Herreros
