@@ -1,5 +1,5 @@
-streamlit>=1.35.0
+fastapi
+uvicorn[standard]
 psycopg2-binary
 openai
 python-dotenv
-fastapi
