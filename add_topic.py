@@ -27,14 +27,14 @@ def auto_generate_next_topic():
         existing_topics = [row[0] for row in cur.fetchall()]
 
         # 2. Seguro por límite de temas (un curso B2 completo suele rondar las 30 unidades)
-        if len(existing_topics) >= 30:
-            print("🏁 El currículo B2 ya ha alcanzado el límite de 30 temas. Se considera completo.")
+        if len(existing_topics) >= 100 :
+            print("🏁 El currículo B2 ya ha alcanzado el límite de 100 temas. Se considera completo.")
             return
 
         # 3. Prompt de nivel Director de Estudios Cambridge
         prompt = f"""
         Eres el Director de Estudios de una academia de élite especializada en preparar el examen Cambridge B2 First (FCE).
-        Estamos construyendo el temario dinámico del curso. Un curso completo de FCE tiene un máximo de 30 unidades.
+        Estamos construyendo el temario dinámico del curso. Un curso completo de FCE tiene un máximo de 100 unidades.
         
         Este es el temario que ya hemos generado hasta ahora, en estricto orden:
         {existing_topics}
