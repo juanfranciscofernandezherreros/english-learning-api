@@ -4,6 +4,19 @@ All notable changes merged to `master` are documented automatically.
 
 ## 2026-05-24
 
+### Update Procfile
+
+- **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`636f431`](https://github.com/juanfranciscofernandezherreros/youtube-streamlit/commit/636f4318bfe04994f37d0775f52d1cb4e9dcc666)
+
+**Changed files (1):**
+
+- 🟡 `Procfile`
+
+---
+
+## 2026-05-24
+
 ### Update requirements.txt
 
 - **Author:** Juan Francisco Fernandez Herreros
