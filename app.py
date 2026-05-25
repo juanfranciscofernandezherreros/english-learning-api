@@ -26,6 +26,9 @@ class UserRegister(BaseModel):
 class UserLogin(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678X")
 
+class UserLogout(BaseModel):
+    dni: str = Field(..., max_length=20, example="12345678X")
+
 class UserResponse(BaseModel):
     dni: str
     nombre: str
@@ -117,7 +120,6 @@ def init_db():
             );
         """)
         conn.commit()
-        # 🔥 Se eliminó la sección de inserción automática de temas semilla (Present Simple, etc.)
     finally:
         cur.close()
         conn.close()
@@ -215,6 +217,32 @@ def login_user(user_data: UserLogin):
         if not user:
             raise HTTPException(status_code=404, detail="Usuario no encontrado.")
         return user
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/auth/logout", tags=["Authentication"])
+def logout_user(user_data: UserLogout):
+    """
+    Informa al sistema el cierre de sesión del estudiante.
+    Nota: Al ser una API sin estado, el cliente (frontend) debe encargarse 
+    de eliminar el DNI/credenciales de su almacenamiento local.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT nombre FROM users WHERE dni = %s;", (user_data.dni.upper(),))
+        user = cur.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+            
+        return {
+            "message": f"Sesión cerrada correctamente para {user['nombre']}.",
+            "status": "success"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
     finally:
         cur.close()
         conn.close()
