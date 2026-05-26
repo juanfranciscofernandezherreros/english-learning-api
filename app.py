@@ -140,7 +140,6 @@ class MarkTopicRead(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678X")
     topic_id: int = Field(..., example=1)
 
-# 🔥 NUEVO MODELO: Para recibir la sincronización masiva desde React
 class TopicSync(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678K")
     completedTopics: List[int] = Field(..., example=[1, 2, 4])
@@ -517,7 +516,7 @@ def get_adaptive_test(
 
 @app.post("/test/adaptive/submit", tags=["Testing Suite"])
 def submit_adaptive_test(payload: AdaptiveSubmit):
-    """Procesa el examen adaptativo, registra el historial en la base de datos."""
+    """Procesamiento del examen adaptativo."""
     questions_dict = {q.id: q for q in payload.questions}
     results = []
     score = 0
@@ -559,7 +558,7 @@ def generate_test_by_topic(
     num_questions: int = 5,
     openai_key: str = Header(..., alias="X-OpenAI-Key")
 ):
-    """Busca un tema específico en la base de datos y obliga a la IA a estructurar un test exclusivo sobre él."""
+    """Generación de test temático oficial por IA."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
@@ -618,7 +617,7 @@ def generate_test_by_topic(
 
 @app.post("/test/topic/submit", tags=["Topic Testing"])
 def submit_topic_test(payload: TopicSubmit):
-    """Procesa los resultados de un examen por temas y los guarda de manera segura en el historial general."""
+    """Procesa los resultados de un examen por temas."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
@@ -697,27 +696,59 @@ def mark_topic_as_read(payload: MarkTopicRead):
         conn.close()
 
 
-# 🔥 NUEVO ENDPOINT: Sincronización Masiva Directa desde React sin pasar por Proxy
-@app.post("/api/auth/sync", tags=["Library"])
-def sync_user_progress(payload: TopicSync):
+# 🔥 ENDPOINT SOLICITADO: Desmarcar un tema como leído (Quitar de la biblioteca)
+@app.delete("/topics/read", tags=["Library"])
+def unmark_topic_as_read(dni: str, topic_id: int):
     """
-    Sincroniza múltiples temas completados por el alumno de una sola vez.
-    Recibe el array 'completedTopics' directo desde el Frontend en React.
+    Desmarca un tema como leído para un usuario específico,
+    eliminando el registro correspondiente de la tabla user_read_topics.
+    Llamada recomendada: DELETE /topics/read?dni=12345678X&topic_id=1
     """
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
-        # 1. Validar existencia del usuario
+        cur.execute("SELECT 1 FROM users WHERE dni = %s;", (dni.upper(),))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        
+        cur.execute("SELECT 1 FROM user_read_topics WHERE user_dni = %s AND topic_id = %s;", (dni.upper(), topic_id))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="El tema no estaba marcado como leído para este usuario.")
+
+        cur.execute("""
+            DELETE FROM user_read_topics 
+            WHERE user_dni = %s AND topic_id = %s;
+        """, (dni.upper(), topic_id))
+        
+        conn.commit()
+        return {
+            "status": "success", 
+            "message": f"Tema con ID {topic_id} desmarcado como leído exitosamente para el DNI {dni.upper()}."
+        }
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en el servidor al desmarcar el tema: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.post("/api/auth/sync", tags=["Library"])
+def sync_user_progress(payload: TopicSync):
+    """Sincroniza múltiples temas completados por el alumno de una sola vez."""
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor()
+    try:
         cur.execute("SELECT 1 FROM users WHERE dni = %s;", (payload.dni.upper(),))
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Usuario no encontrado.")
         
-        # 2. Insertar cada ID del lote aplicando control de conflictos
         for topic_id in payload.completedTopics:
-            # Validamos que el tema exista para no romper restricciones de clave foránea
             cur.execute("SELECT 1 FROM learning_topics WHERE id = %s;", (topic_id,))
             if not cur.fetchone():
-                continue  # Ignora limpiamente IDs inválidos que vengan del cliente
+                continue 
                 
             cur.execute("""
                 INSERT INTO user_read_topics (user_dni, topic_id)
