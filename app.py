@@ -18,6 +18,59 @@ DB_CONFIG = {
     "password": "npg_urVnAFP3Hy4M"
 }
 
+# --- PREGUNTAS PREDETERMINADAS PARA EL PRIMER TEST DE NIVELACIÓN ---
+PREDETERMINED_QUESTIONS = [
+    {
+        "id": 1,
+        "question": "Hello! What ______ your name?",
+        "options": ["is", "am", "are", "be"],
+        "correct": "is",
+        "points": 1,
+        "level_target": "A1"
+    },
+    {
+        "id": 2,
+        "question": "Yesterday, I ______ to the cinema with my friends.",
+        "options": ["go", "went", "gone", "was go"],
+        "correct": "went",
+        "points": 1,
+        "level_target": "A2"
+    },
+    {
+        "id": 3,
+        "question": "I have been living in London ______ three years.",
+        "options": ["since", "for", "during", "from"],
+        "correct": "for",
+        "points": 2,
+        "level_target": "B1"
+    },
+    {
+        "id": 4,
+        "question": "If I ______ more money, I would buy a new car.",
+        "options": ["have", "had", "would have", "had had"],
+        "correct": "had",
+        "points": 2,
+        "level_target": "B2"
+    },
+    {
+        "id": 5,
+        "question": "He denied ______ the money from the safe.",
+        "options": ["to steal", "stealing", "stole", "have stolen"],
+        "correct": "stealing",
+        "points": 3,
+        "level_target": "C1"
+    },
+    {
+        "id": 6,
+        "question": "Little ______ did she know that the surprise party was for her.",
+        "options": ["although", "what", "do", "did"],
+        "correct": "did",
+        "points": 3,
+        "level_target": "C2"
+    }
+]
+
+
 # --- 1. MODELOS DE DATOS (PYDANTIC SCHEMAS) ---
 
 class UserRegister(BaseModel):
@@ -82,7 +135,6 @@ class TopicSubmit(BaseModel):
     questions: List[TopicQuestion]
     answers: Dict[int, str]
 
-# --- NUEVOS MODELOS: PROGRESO Y PERFIL DE USUARIO ---
 class MarkTopicRead(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678X")
     topic_id: int = Field(..., example=1)
@@ -137,7 +189,6 @@ def init_db():
                 examples JSONB NOT NULL
             );
         """)
-        # Nueva tabla intermedia para almacenar el progreso de lectura
         cur.execute("""
             CREATE TABLE IF NOT EXISTS user_read_topics (
                 user_dni VARCHAR(20) REFERENCES users(dni) ON DELETE CASCADE,
@@ -185,12 +236,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI English Academy API",
     description="Backend adaptativo para evaluación y librería de inglés mediante IA",
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan
 )
 
 
-# --- 4. ENDPOINTS EXISTENTES ---
+# --- 4. ENDPOINTS EXISTENTES Y ACTUALIZADOS ---
 
 @app.get("/topics", response_model=List[TopicResponse], tags=["Library"])
 def get_topics():
@@ -203,7 +254,7 @@ def get_topics():
         for t in topics:
             if isinstance(t['examples'], str):
                 t['examples'] = json.loads(t['examples'])
-            return topics
+        return topics
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -272,8 +323,42 @@ def logout_user(user_data: UserLogout):
 
 
 @app.get("/test/placement/generate", response_model=List[PlacementQuestion], tags=["Testing Suite"])
-def get_placement_test(openai_key: str = Header(..., alias="X-OpenAI-Key")):
-    """Genera dinámicamente un examen de nivelación (A1 a C2) mediante GPT-4o."""
+def get_placement_test(
+    dni: str, 
+    openai_key: Optional[str] = Header(None, alias="X-OpenAI-Key")
+):
+    """
+    Genera o devuelve un examen de nivelación (A1 a C2).
+    - Si es la primera vez del usuario (nivel_calculado es NULL), carga preguntas fijas predeterminadas.
+    - Si ya cuenta con un nivel guardado, genera dinámicamente un test nuevo vía OpenAI GPT-4o.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        cur.execute("SELECT nivel_calculado FROM users WHERE dni = %s;", (dni.upper(),))
+        user = cur.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado. Por favor, regístrese primero.")
+        
+        # Flujo primera vez: Retorna el set estático sin consumir créditos de OpenAI
+        if user["nivel_calculado"] is None:
+            return PREDETERMINED_QUESTIONS
+            
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en base de datos: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+    # Si es re-test, validamos que exista la API key en las cabeceras
+    if not openai_key:
+        raise HTTPException(
+            status_code=400, 
+            detail="Ya has realizado tu prueba de nivel inicial. Para repetir la evaluación de forma dinámica, envía la cabecera X-OpenAI-Key."
+        )
+
     client = OpenAI(api_key=openai_key)
     prompt = """
     Eres un examinador oficial de inglés. Diseña un test de nivelación (Placement Test) de exactamente 12 preguntas.
@@ -524,7 +609,7 @@ def submit_topic_test(payload: TopicSubmit):
         conn.close()
 
 
-# --- 6. PROGRESO Y PERFIL DEL USUARIO (NUEVA SECCIÓN) ---
+# --- 6. PROGRESO Y PERFIL DEL USUARIO ---
 
 @app.post("/topics/read", tags=["Library"])
 def mark_topic_as_read(payload: MarkTopicRead):
@@ -535,17 +620,14 @@ def mark_topic_as_read(payload: MarkTopicRead):
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
-        # Verificar si el usuario existe
         cur.execute("SELECT 1 FROM users WHERE dni = %s;", (payload.dni.upper(),))
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="Usuario no encontrado.")
         
-        # Verificar si el tema existe
         cur.execute("SELECT 1 FROM learning_topics WHERE id = %s;", (payload.topic_id,))
         if not cur.fetchone():
             raise HTTPException(status_code=404, detail="El tema solicitado no existe.")
 
-        # Guardar registro de lectura ignorando duplicados por consistencia
         cur.execute("""
             INSERT INTO user_read_topics (user_dni, topic_id)
             VALUES (%s, %s)
@@ -571,13 +653,11 @@ def get_user_profile(dni: str):
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        # Obtener datos generales de la cuenta
         cur.execute("SELECT * FROM users WHERE dni = %s;", (dni.upper(),))
         user = cur.fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="Usuario no encontrado.")
         
-        # Obtener los artículos leídos mediante JOIN
         cur.execute("""
             SELECT urt.topic_id, lt.title, urt.read_at
             FROM user_read_topics urt
