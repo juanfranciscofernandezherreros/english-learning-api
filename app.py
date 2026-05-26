@@ -155,7 +155,7 @@ class UserProfileResponse(BaseModel):
 # --- 2. FUNCIONES INTERNAS Y BASE DE DATOS ---
 
 def init_db():
-    """Inicializa las tablas base de la academia si no existen."""
+    """Inicializa las tablas base de la academia si no existen y aplica parches de migración."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
@@ -167,6 +167,12 @@ def init_db():
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        
+        # 🔥 PARCHE AUTOMÁTICO: Forzar la creación de la columna si la tabla users ya existía previamente sin ella
+        cur.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS nivel_calculado VARCHAR(50) DEFAULT NULL;
+        """)
+        
         cur.execute("""
             CREATE TABLE IF NOT EXISTS english_test_history (
                 id SERIAL PRIMARY KEY,
@@ -236,7 +242,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI English Academy API",
     description="Backend adaptativo para evaluación y librería de inglés mediante IA",
-    version="1.3.0",
+    version="1.3.1",
     lifespan=lifespan
 )
 
