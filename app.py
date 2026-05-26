@@ -140,6 +140,11 @@ class MarkTopicRead(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678X")
     topic_id: int = Field(..., example=1)
 
+# 🔥 NUEVO MODELO: Para recibir la sincronización masiva desde React
+class TopicSync(BaseModel):
+    dni: str = Field(..., max_length=20, example="12345678K")
+    completedTopics: List[int] = Field(..., example=[1, 2, 4])
+
 class ReadTopicInfo(BaseModel):
     topic_id: int
     title: str
@@ -171,7 +176,7 @@ def init_db():
             );
         """)
         
-        # 🔥 PARCHES AUTOMÁTICOS: Asegurar columnas en tablas previas
+        # PARCHES AUTOMÁTICOS: Asegurar columnas en tablas previas
         cur.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS nivel_calculado VARCHAR(50) DEFAULT NULL;
         """)
@@ -353,7 +358,6 @@ def get_placement_test(
         if not user:
             raise HTTPException(status_code=404, detail="Usuario no encontrado. Por favor, regístrese primero.")
         
-        # 🔥 CANDADO: Si ya completó y envió el test con éxito, queda totalmente prohibido repetir
         if user.get("placement_completed"):
             raise HTTPException(
                 status_code=400, 
@@ -414,7 +418,6 @@ def submit_placement_test(payload: PlacementSubmit):
     cur = conn.cursor()
     
     try:
-        # Validar si el usuario ya lo completó antes para evitar doble envío accidental
         cur.execute("SELECT placement_completed FROM users WHERE dni = %s;", (payload.dni.upper(),))
         user_check = cur.fetchone()
         if user_check and user_check[0]:
@@ -430,7 +433,6 @@ def submit_placement_test(payload: PlacementSubmit):
             if is_correct:
                 earned_points += q.points
             
-            # 🔥 PERSISTENCIA COMPLETA DEL EXAMEN EN EL HISTORIAL
             cur.execute("""
                 INSERT INTO english_test_history (user_dni, question, level, user_answer, correct_answer, is_correct, explanation)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -446,7 +448,6 @@ def submit_placement_test(payload: PlacementSubmit):
             
         calculated_lvl = calculate_mcer_level(earned_points, max_points)
         
-        # 🔥 CAMBIO Y CIERRE DE SEGURIDAD: Guardamos nivel y marcamos 'placement_completed' como TRUE
         cur.execute("""
             UPDATE users 
             SET nivel_calculado = %s, placement_completed = TRUE 
@@ -468,7 +469,7 @@ def submit_placement_test(payload: PlacementSubmit):
         "dni": payload.dni,
         "puntos_obtenidos": earned_points,
         "puntos_maximos": max_points,
-        "nivel_asignado": calculated_lvl
+        "nivel_assigned": calculated_lvl
     }
 
 
@@ -668,10 +669,7 @@ def submit_topic_test(payload: TopicSubmit):
 
 @app.post("/topics/read", tags=["Library"])
 def mark_topic_as_read(payload: MarkTopicRead):
-    """
-    Registra que un usuario específico ha leído un tema concreto.
-    Evita duplicaciones mediante restricciones de clave primaria.
-    """
+    """Registra que un usuario específico ha leído un tema concreto (Individual)."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
@@ -699,12 +697,50 @@ def mark_topic_as_read(payload: MarkTopicRead):
         conn.close()
 
 
+# 🔥 NUEVO ENDPOINT: Sincronización Masiva Directa desde React sin pasar por Proxy
+@app.post("/api/auth/sync", tags=["Library"])
+def sync_user_progress(payload: TopicSync):
+    """
+    Sincroniza múltiples temas completados por el alumno de una sola vez.
+    Recibe el array 'completedTopics' directo desde el Frontend en React.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor()
+    try:
+        # 1. Validar existencia del usuario
+        cur.execute("SELECT 1 FROM users WHERE dni = %s;", (payload.dni.upper(),))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        
+        # 2. Insertar cada ID del lote aplicando control de conflictos
+        for topic_id in payload.completedTopics:
+            # Validamos que el tema exista para no romper restricciones de clave foránea
+            cur.execute("SELECT 1 FROM learning_topics WHERE id = %s;", (topic_id,))
+            if not cur.fetchone():
+                continue  # Ignora limpiamente IDs inválidos que vengan del cliente
+                
+            cur.execute("""
+                INSERT INTO user_read_topics (user_dni, topic_id)
+                VALUES (%s, %s)
+                ON CONFLICT (user_dni, topic_id) DO NOTHING;
+            """, (payload.dni.upper(), topic_id))
+            
+        conn.commit()
+        return {
+            "success": True,
+            "message": "Progress synced successfully."
+        }
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error interno durante la sincronización: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+
 @app.get("/users/{dni}/profile", response_model=UserProfileResponse, tags=["Profile"])
 def get_user_profile(dni: str):
-    """
-    Recupera el perfil consolidado del estudiante: datos personales,
-    nivel MCER calculado, flag de test completado e histórico de temas.
-    """
+    """Recupera el perfil consolidado del estudiante."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
