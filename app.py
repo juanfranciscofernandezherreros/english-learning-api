@@ -87,6 +87,7 @@ class UserResponse(BaseModel):
     dni: str
     nombre: str
     nivel_calculado: Optional[str] = None
+    placement_completed: bool = False
     created_at: datetime
 
 class TopicResponse(BaseModel):
@@ -148,6 +149,7 @@ class UserProfileResponse(BaseModel):
     dni: str
     nombre: str
     nivel_calculado: Optional[str] = None
+    placement_completed: bool = False
     created_at: datetime
     topics_read: List[ReadTopicInfo] = []
 
@@ -164,13 +166,17 @@ def init_db():
                 dni VARCHAR(20) PRIMARY KEY,
                 nombre VARCHAR(100) NOT NULL,
                 nivel_calculado VARCHAR(50) DEFAULT NULL,
+                placement_completed BOOLEAN DEFAULT FALSE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
         
-        # 🔥 PARCHE AUTOMÁTICO: Forzar la creación de la columna si la tabla users ya existía previamente sin ella
+        # 🔥 PARCHES AUTOMÁTICOS: Asegurar columnas en tablas previas
         cur.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS nivel_calculado VARCHAR(50) DEFAULT NULL;
+        """)
+        cur.execute("""
+            ALTER TABLE users ADD COLUMN IF NOT EXISTS placement_completed BOOLEAN DEFAULT FALSE;
         """)
         
         cur.execute("""
@@ -224,6 +230,7 @@ def get_recent_failures(dni: str, lvl: str, limit: int = 5) -> List[dict]:
         conn.close()
 
 def calculate_mcer_level(score: int, max_possible_points: int) -> str:
+    if max_possible_points == 0: return "A1 (Principiante)"
     percentage = (score / max_possible_points) * 100
     if percentage < 20: return "A1 (Principiante)"
     elif percentage < 40: return "A2 (Elemental)"
@@ -242,7 +249,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI English Academy API",
     description="Backend adaptativo para evaluación y librería de inglés mediante IA",
-    version="1.3.1",
+    version="1.4.0",
     lifespan=lifespan
 )
 
@@ -335,18 +342,24 @@ def get_placement_test(
 ):
     """
     Genera o devuelve un examen de nivelación (A1 a C2).
-    - Si es la primera vez del usuario (nivel_calculado es NULL), carga preguntas fijas predeterminadas.
-    - Si ya cuenta con un nivel guardado, genera dinámicamente un test nuevo vía OpenAI GPT-4o.
+    - Si el usuario ya completó el examen anteriormente, bloquea el acceso.
+    - Si es su primera vez, carga preguntas fijas predeterminadas.
     """
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
-        cur.execute("SELECT nivel_calculado FROM users WHERE dni = %s;", (dni.upper(),))
+        cur.execute("SELECT nivel_calculado, placement_completed FROM users WHERE dni = %s;", (dni.upper(),))
         user = cur.fetchone()
         if not user:
             raise HTTPException(status_code=404, detail="Usuario no encontrado. Por favor, regístrese primero.")
         
-        # Flujo primera vez: Retorna el set estático sin consumir créditos de OpenAI
+        # 🔥 CANDADO: Si ya completó y envió el test con éxito, queda totalmente prohibido repetir
+        if user.get("placement_completed"):
+            raise HTTPException(
+                status_code=400, 
+                detail="Ya has realizado tu prueba de nivelación inicial de forma correcta. No está permitido repetir este test."
+            )
+        
         if user["nivel_calculado"] is None:
             return PREDETERMINED_QUESTIONS
             
@@ -358,16 +371,15 @@ def get_placement_test(
         cur.close()
         conn.close()
 
-    # Si es re-test, validamos que exista la API key en las cabeceras
     if not openai_key:
         raise HTTPException(
             status_code=400, 
-            detail="Ya has realizado tu prueba de nivel inicial. Para repetir la evaluación de forma dinámica, envía la cabecera X-OpenAI-Key."
+            detail="Ya cuentas con un proceso de nivelación iniciado. Envía la cabecera X-OpenAI-Key para continuar."
         )
 
     client = OpenAI(api_key=openai_key)
     prompt = """
-    Eres un examinador oficial de inglés. Diseña un test de nivelación (Placement Test) de exactamente 12 preguntas.
+    Eres un examiner oficial de inglés. Diseña un test de nivelación (Placement Test) de exactamente 12 preguntas.
     El test debe ser progresivo (A1 a C2). Devuelve obligatoriamente un JSON con clave "questions".
     Cada pregunta debe estructurarse así:
     {
@@ -393,7 +405,7 @@ def get_placement_test(
 
 @app.post("/test/placement/submit", tags=["Testing Suite"])
 def submit_placement_test(payload: PlacementSubmit):
-    """Evalúa las respuestas de nivelación, calcula el nivel MCER, actualiza el perfil y guarda el examen en el historial."""
+    """Evalúa las respuestas de nivelación, calcula el nivel MCER, guarda el examen en el historial y marca el test como completado."""
     earned_points = 0
     max_points = sum(q.points for q in payload.questions)
     questions_dict = {q.id: q for q in payload.questions}
@@ -402,7 +414,12 @@ def submit_placement_test(payload: PlacementSubmit):
     cur = conn.cursor()
     
     try:
-        # Recorremos las respuestas del payload
+        # Validar si el usuario ya lo completó antes para evitar doble envío accidental
+        cur.execute("SELECT placement_completed FROM users WHERE dni = %s;", (payload.dni.upper(),))
+        user_check = cur.fetchone()
+        if user_check and user_check[0]:
+            raise HTTPException(status_code=400, detail="Este examen ya fue enviado y procesado previamente.")
+
         for q_id, user_ans in payload.answers.items():
             if q_id not in questions_dict: 
                 continue
@@ -413,7 +430,7 @@ def submit_placement_test(payload: PlacementSubmit):
             if is_correct:
                 earned_points += q.points
             
-            # 🔥 PERSISTENCIA DEL EXAMEN: Guardamos cada pregunta y respuesta en el historial
+            # 🔥 PERSISTENCIA COMPLETA DEL EXAMEN EN EL HISTORIAL
             cur.execute("""
                 INSERT INTO english_test_history (user_dni, question, level, user_answer, correct_answer, is_correct, explanation)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -427,18 +444,22 @@ def submit_placement_test(payload: PlacementSubmit):
                 "Pregunta de Test de Nivelación Inicial"
             ))
             
-        # Calculamos el nivel final tras procesar los puntos
         calculated_lvl = calculate_mcer_level(earned_points, max_points)
         
-        # Actualizamos el nivel del usuario
-        cur.execute("UPDATE users SET nivel_calculado = %s WHERE dni = %s;", (calculated_lvl, payload.dni.upper()))
+        # 🔥 CAMBIO Y CIERRE DE SEGURIDAD: Guardamos nivel y marcamos 'placement_completed' como TRUE
+        cur.execute("""
+            UPDATE users 
+            SET nivel_calculado = %s, placement_completed = TRUE 
+            WHERE dni = %s;
+        """, (calculated_lvl, payload.dni.upper()))
         
-        # Confirmamos toda la transacción (historial + usuario)
         conn.commit()
         
+    except HTTPException as he:
+        raise he
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error en BD al guardar el examen: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error en BD al procesar el examen: {str(e)}")
     finally:
         cur.close()
         conn.close()
@@ -682,7 +703,7 @@ def mark_topic_as_read(payload: MarkTopicRead):
 def get_user_profile(dni: str):
     """
     Recupera el perfil consolidado del estudiante: datos personales,
-    nivel MCER calculado y el histórico de temas completados/leídos.
+    nivel MCER calculado, flag de test completado e histórico de temas.
     """
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
@@ -705,6 +726,7 @@ def get_user_profile(dni: str):
             "dni": user["dni"],
             "nombre": user["nombre"],
             "nivel_calculado": user["nivel_calculado"],
+            "placement_completed": user.get("placement_completed", False),
             "created_at": user["created_at"],
             "topics_read": read_topics
         }
