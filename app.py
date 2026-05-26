@@ -393,24 +393,52 @@ def get_placement_test(
 
 @app.post("/test/placement/submit", tags=["Testing Suite"])
 def submit_placement_test(payload: PlacementSubmit):
-    """Evalúa las respuestas de nivelación, calcula el nivel MCER y lo guarda en el perfil."""
+    """Evalúa las respuestas de nivelación, calcula el nivel MCER, actualiza el perfil y guarda el examen en el historial."""
     earned_points = 0
     max_points = sum(q.points for q in payload.questions)
     questions_dict = {q.id: q for q in payload.questions}
     
-    for q_id, user_ans in payload.answers.items():
-        if q_id in questions_dict and user_ans == questions_dict[q_id].correct:
-            earned_points += questions_dict[q_id].points
-            
-    calculated_lvl = calculate_mcer_level(earned_points, max_points)
-    
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
+    
     try:
+        # Recorremos las respuestas del payload
+        for q_id, user_ans in payload.answers.items():
+            if q_id not in questions_dict: 
+                continue
+                
+            q = questions_dict[q_id]
+            is_correct = (user_ans == q.correct)
+            
+            if is_correct:
+                earned_points += q.points
+            
+            # 🔥 PERSISTENCIA DEL EXAMEN: Guardamos cada pregunta y respuesta en el historial
+            cur.execute("""
+                INSERT INTO english_test_history (user_dni, question, level, user_answer, correct_answer, is_correct, explanation)
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """, (
+                payload.dni.upper(), 
+                q.question, 
+                q.level_target, 
+                user_ans, 
+                q.correct, 
+                is_correct, 
+                "Pregunta de Test de Nivelación Inicial"
+            ))
+            
+        # Calculamos el nivel final tras procesar los puntos
+        calculated_lvl = calculate_mcer_level(earned_points, max_points)
+        
+        # Actualizamos el nivel del usuario
         cur.execute("UPDATE users SET nivel_calculado = %s WHERE dni = %s;", (calculated_lvl, payload.dni.upper()))
+        
+        # Confirmamos toda la transacción (historial + usuario)
         conn.commit()
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en BD: {str(e)}")
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en BD al guardar el examen: {str(e)}")
     finally:
         cur.close()
         conn.close()
