@@ -7,6 +7,15 @@ All notable changes merged to `master` are documented automatically.
 ### Update app.py
 
 - **Author:** Juan Francisco Fernandez Herreros
+- **Commit:** [`504854f`](https://github.com/juanfranciscofernandezherreros/english-learning-api/commit/504854f74a3cfffaa342b3d7dd2c14b1bb91a997)
+
+---
+
+## 2026-05-26
+
+### Update app.py
+
+- **Author:** Juan Francisco Fernandez Herreros
 - **Commit:** [`547c185`](https://github.com/juanfranciscofernandezherreros/english-learning-api/commit/547c185ead88aa6de899920bf48fa3be6cf3168c)
 
 **Changed files (1):**
