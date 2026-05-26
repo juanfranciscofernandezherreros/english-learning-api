@@ -19,6 +19,7 @@ DB_CONFIG = {
 }
 
 # --- 1. MODELOS DE DATOS (PYDANTIC SCHEMAS) ---
+
 class UserRegister(BaseModel):
     dni: str = Field(..., max_length=20, example="12345678X")
     nombre: str = Field(..., max_length=100, example="John Doe")
@@ -68,7 +69,6 @@ class AdaptiveSubmit(BaseModel):
     questions: List[AdaptiveQuestion]
     answers: Dict[int, str]
 
-# --- NUEVOS MODELOS PARA PASAR TEST POR TEMAS ---
 class TopicQuestion(BaseModel):
     id: int
     question: str
@@ -82,10 +82,28 @@ class TopicSubmit(BaseModel):
     questions: List[TopicQuestion]
     answers: Dict[int, str]
 
+# --- NUEVOS MODELOS: PROGRESO Y PERFIL DE USUARIO ---
+class MarkTopicRead(BaseModel):
+    dni: str = Field(..., max_length=20, example="12345678X")
+    topic_id: int = Field(..., example=1)
+
+class ReadTopicInfo(BaseModel):
+    topic_id: int
+    title: str
+    read_at: datetime
+
+class UserProfileResponse(BaseModel):
+    dni: str
+    nombre: str
+    nivel_calculado: Optional[str] = None
+    created_at: datetime
+    topics_read: List[ReadTopicInfo] = []
+
 
 # --- 2. FUNCIONES INTERNAS Y BASE DE DATOS ---
+
 def init_db():
-    """Inicializa las tablas base de la academia si no existen, manteniéndolas vacías."""
+    """Inicializa las tablas base de la academia si no existen."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
     try:
@@ -117,6 +135,15 @@ def init_db():
                 summary TEXT NOT NULL,
                 content TEXT NOT NULL,
                 examples JSONB NOT NULL
+            );
+        """)
+        # Nueva tabla intermedia para almacenar el progreso de lectura
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS user_read_topics (
+                user_dni VARCHAR(20) REFERENCES users(dni) ON DELETE CASCADE,
+                topic_id INT REFERENCES learning_topics(id) ON DELETE CASCADE,
+                read_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_dni, topic_id)
             );
         """)
         conn.commit()
@@ -158,7 +185,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="AI English Academy API",
     description="Backend adaptativo para evaluación y librería de inglés mediante IA",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan
 )
 
@@ -176,7 +203,7 @@ def get_topics():
         for t in topics:
             if isinstance(t['examples'], str):
                 t['examples'] = json.loads(t['examples'])
-        return topics
+            return topics
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -224,11 +251,7 @@ def login_user(user_data: UserLogin):
 
 @app.post("/auth/logout", tags=["Authentication"])
 def logout_user(user_data: UserLogout):
-    """
-    Informa al sistema el cierre de sesión del estudiante.
-    Nota: Al ser una API sin estado, el cliente (frontend) debe encargarse 
-    de eliminar el DNI/credenciales de su almacenamiento local.
-    """
+    """Informa al sistema el cierre de sesión del estudiante."""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor(cursor_factory=RealDictCursor)
     try:
@@ -387,7 +410,7 @@ def submit_adaptive_test(payload: AdaptiveSubmit):
         conn.close()
 
 
-# --- 5. NUEVA FUNCIONALIDAD: GENERACIÓN DE EXÁMENES POR TEMA ---
+# --- 5. EXÁMENES POR TEMA ---
 
 @app.get("/test/topic/generate", response_model=List[TopicQuestion], tags=["Topic Testing"])
 def generate_test_by_topic(
@@ -400,7 +423,6 @@ def generate_test_by_topic(
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # 1. Extraer los datos del tema del curso
         cur.execute("SELECT * FROM learning_topics WHERE id = %s;", (topic_id,))
         topic = cur.fetchone()
         if not topic:
@@ -409,12 +431,10 @@ def generate_test_by_topic(
         cur.close()
         conn.close()
 
-    # Formatear ejemplos
     examples_str = topic['examples']
     if isinstance(examples_str, str):
         examples_str = json.loads(examples_str)
 
-    # 2. Entrenar el Prompt con el contexto real extraído de la base de datos
     client = OpenAI(api_key=openai_key)
     prompt = f"""
     Eres un profesor de inglés experto encargado de crear exámenes temáticos. 
@@ -462,13 +482,12 @@ def submit_topic_test(payload: TopicSubmit):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     
     try:
-        # Obtener el título del tema para el registro de nivel
         cur.execute("SELECT title FROM learning_topics WHERE id = %s;", (payload.topic_id,))
         topic = cur.fetchone()
         if not topic:
             raise HTTPException(status_code=404, detail="Tema no encontrado.")
             
-        topic_title = f"Tema: {topic['title']}"[:50] # Asegurar límite de la columna
+        topic_title = f"Tema: {topic['title']}"[:50]
         
         questions_dict = {q.id: q for q in payload.questions}
         results = []
@@ -480,7 +499,6 @@ def submit_topic_test(payload: TopicSubmit):
             is_correct = (user_ans == q.correct)
             if is_correct: score += 1
             
-            # Insertar en la tabla de historial tradicional
             cur.execute("""
                 INSERT INTO english_test_history (user_dni, question, level, user_answer, correct_answer, is_correct, explanation)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
@@ -501,6 +519,83 @@ def submit_topic_test(payload: TopicSubmit):
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        cur.close()
+        conn.close()
+
+
+# --- 6. PROGRESO Y PERFIL DEL USUARIO (NUEVA SECCIÓN) ---
+
+@app.post("/topics/read", tags=["Library"])
+def mark_topic_as_read(payload: MarkTopicRead):
+    """
+    Registra que un usuario específico ha leído un tema concreto.
+    Evita duplicaciones mediante restricciones de clave primaria.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor()
+    try:
+        # Verificar si el usuario existe
+        cur.execute("SELECT 1 FROM users WHERE dni = %s;", (payload.dni.upper(),))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        
+        # Verificar si el tema existe
+        cur.execute("SELECT 1 FROM learning_topics WHERE id = %s;", (payload.topic_id,))
+        if not cur.fetchone():
+            raise HTTPException(status_code=404, detail="El tema solicitado no existe.")
+
+        # Guardar registro de lectura ignorando duplicados por consistencia
+        cur.execute("""
+            INSERT INTO user_read_topics (user_dni, topic_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_dni, topic_id) DO NOTHING;
+        """, (payload.dni.upper(), payload.topic_id))
+        
+        conn.commit()
+        return {"status": "success", "message": "Tema marcado como leído exitosamente."}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=f"Error en el servidor: {str(e)}")
+    finally:
+        cur.close()
+        conn.close()
+
+
+@app.get("/users/{dni}/profile", response_model=UserProfileResponse, tags=["Profile"])
+def get_user_profile(dni: str):
+    """
+    Recupera el perfil consolidado del estudiante: datos personales,
+    nivel MCER calculado y el histórico de temas completados/leídos.
+    """
+    conn = psycopg2.connect(**DB_CONFIG)
+    cur = conn.cursor(cursor_factory=RealDictCursor)
+    try:
+        # Obtener datos generales de la cuenta
+        cur.execute("SELECT * FROM users WHERE dni = %s;", (dni.upper(),))
+        user = cur.fetchone()
+        if not user:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado.")
+        
+        # Obtener los artículos leídos mediante JOIN
+        cur.execute("""
+            SELECT urt.topic_id, lt.title, urt.read_at
+            FROM user_read_topics urt
+            JOIN learning_topics lt ON urt.topic_id = lt.id
+            WHERE urt.user_dni = %s
+            ORDER BY urt.read_at DESC;
+        """, (dni.upper(),))
+        read_topics = cur.fetchall()
+        
+        return {
+            "dni": user["dni"],
+            "nombre": user["nombre"],
+            "nivel_calculado": user["nivel_calculado"],
+            "created_at": user["created_at"],
+            "topics_read": read_topics
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al procesar el perfil: {str(e)}")
     finally:
         cur.close()
         conn.close()
